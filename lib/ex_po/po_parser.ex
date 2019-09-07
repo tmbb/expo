@@ -1,7 +1,7 @@
 defmodule ExPo.PoParser do
   @moduledoc false
   import NimbleParsec
-  alias ExPo.PoTranslation
+  alias ExPo.Translations.PoTranslation
 
   #  The format of an entry in a `.po` file is the following:
   #
@@ -24,9 +24,28 @@ defmodule ExPo.PoParser do
     List.to_string(parts)
   end
 
-  def make_translation(parts) do
-    deduped = Enum.dedup_by(parts, fn {tag, _value} -> tag end)
-    PoTranslation.new(deduped)
+  def maybe_unwrap({key, [value]}) when is_list(value), do: {key, value}
+  def maybe_unwrap(pair), do: pair
+
+  def to_translation(keywords) do
+    case Keyword.has_key?(keywords, :msgid_plural) do
+      true ->
+        PoPluralTranslation.new(keywords)
+
+      false ->
+        PoTranslation.new(keywords)
+    end
+  end
+
+  def make_translation(_rest, parts, context, {line, _what?}, _offset) do
+    translation =
+      parts
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+      |> Enum.map(&maybe_unwrap/1)
+      |> Keyword.put(:po_source_line, line)
+      |> to_translation()
+
+    {[translation], context}
   end
 
   newline =
@@ -53,24 +72,21 @@ defmodule ExPo.PoParser do
     |> ignore(ascii_char([?"]))
     |> reduce(:make_string)
 
-  lines = fn marker, tag ->
+  line_comment = fn marker, tag ->
     marker
     |> optional(ascii_char([?\s]))
     |> ignore()
     |> wrap(line)
     |> times(min: 1)
-    |> reduce(:merge_lines)
-    |> unwrap_and_tag(tag)
+    |> tag(tag)
   end
 
   text_field = fn marker, tag ->
     marker
     |> concat(whitespace)
     |> ignore()
-    |> concat(text)
-    |> ignore(whitespace)
-    |> ignore(newline)
-    |> unwrap_and_tag(tag)
+    |> times(text |> ignore(whitespace) |> ignore(newline), min: 1)
+    |> tag(tag)
   end
 
   blank_line = whitespace |> concat(ascii_char([?\n]))
@@ -84,18 +100,22 @@ defmodule ExPo.PoParser do
     string("#:")
     |> concat(whitespace)
     |> ignore()
-    |> unwrap_and_tag(utf8_string([not: ?:, not: ?\n], min: 1), :file)
+    # Won't be ignored:
+    |> utf8_string([not: ?:, not: ?\n], min: 1)
     |> ignore(string(":"))
-    |> unwrap_and_tag(integer, :line)
+    # Won't be ignored:
+    |> concat(integer)
     |> ignore(whitespace |> concat(newline))
+    |> reduce({List, :to_tuple, []})
+    |> unwrap_and_tag(:references)
 
-  extracted_comments = lines.(string("#."), :comment)
-  msgid_untranslated_string = lines.(string("#|"), :msgid_untranslated)
-  flag = lines.(string("#,"), :flag)
+  extracted_comments = line_comment.(string("#."), :comments)
+  msgid_untranslated_string = line_comment.(string("#|"), :msgid_untranslated)
+  flag = line_comment.(string("#,"), :flags)
 
-  msgid = text_field.(string("msgid"), :string)
-  msgstr = text_field.(string("msgstr"), :translated)
-  msgctxt = text_field.(string("msgctxt"), :context)
+  msgid = text_field.(string("msgid"), :msgid)
+  msgstr = text_field.(string("msgstr"), :msgtr)
+  msgctxt = text_field.(string("msgctxt"), :msgctxt)
 
   specific_comments = [
     reference,
@@ -114,7 +134,7 @@ defmodule ExPo.PoParser do
     |> lookahead_not()
     |> string("#")
 
-  translator_comments = lines.(translator_comments_marker, :translator_comments)
+  translator_comments = line_comment.(translator_comments_marker, :translator_comments)
 
   comment = choice([translator_comments | specific_comments])
 
@@ -127,7 +147,9 @@ defmodule ExPo.PoParser do
     repeat(comment)
     |> concat(text_fields)
     |> ignore(blank_lines)
-    |> reduce(:make_translation)
+    # We need `pre_traverse` because we need the location
+    # at the beginning of the translation and not at the end
+    |> pre_traverse(:make_translation)
 
   translations =
     blank_lines
