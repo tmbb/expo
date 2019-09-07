@@ -1,4 +1,4 @@
-defmodule ExPo.Translations.PluralTranslation do
+defmodule ExPo.Translations.PoPluralTranslation do
   @moduledoc """
   A struct that holds information on a plural translation.
   This struct describes a translation which has a plural form, such as the one
