@@ -73,17 +73,22 @@ defmodule Expo.PoParser do
 
   whitespace_chars = [?\s, ?\t, ?\f]
 
+  escape_char = [
+    replace(string("\\\""), ?"),
+    replace(string("\n"), ?\n),
+    replace(string("\t"), ?\t),
+    replace(string("\f"), ?\f)
+  ]
+
   whitespace = repeat(ascii_char(whitespace_chars))
 
-  # TODO: extend to multiline strings
-  text =
+  blank_line = whitespace |> concat(ascii_char([?\n]))
+
+  blank_lines = repeat(blank_line)
+
+  text_string =
     ignore(ascii_char([?"]))
-    |> repeat(
-      choice([
-        replace(string(~S[\"]), ?"),
-        utf8_char(not: ?")
-      ])
-    )
+    |> repeat(choice(escape_char ++ [utf8_char(not: ?")]))
     |> ignore(ascii_char([?"]))
     |> reduce(:make_string)
 
@@ -96,22 +101,18 @@ defmodule Expo.PoParser do
     |> tag(tag)
   end
 
-  text_string =
+  whitespace_delimited_text_line =
     ignore(optional(whitespace))
-    |> concat(text)
-    |> ignore(whitespace)
-    |> ignore(newline)
+    |> concat(text_string)
+    |> ignore(times(blank_line, min: 1))
 
   text_field = fn marker, tag ->
     marker
     |> concat(whitespace)
     |> ignore()
-    |> times(text_string, min: 1)
+    |> times(whitespace_delimited_text_line, min: 1)
     |> tag(tag)
   end
-
-  blank_line = whitespace |> concat(ascii_char([?\n]))
-  blank_lines = repeat(blank_line)
 
   integer =
     ascii_string([?0..?9], min: 1)
@@ -147,7 +148,7 @@ defmodule Expo.PoParser do
     |> ignore(string("]"))
     |> ignore(whitespace)
     # Will not be ignored
-    |> times(text |> ignore(whitespace) |> ignore(newline), min: 1)
+    |> times(text_string |> ignore(whitespace) |> ignore(newline), min: 1)
     # Turn this into a `{key, value}` tuple
     |> reduce({List, :to_tuple, []})
 
@@ -204,6 +205,7 @@ defmodule Expo.PoParser do
     |> ignore()
     |> repeat(translation)
 
+  defparsecp(:text_string, text_string)
   defparsecp(:translation, translation)
   defparsecp(:reference, reference)
   defparsecp(:translations, translations)
@@ -212,6 +214,17 @@ defmodule Expo.PoParser do
   def parse_reference(text) do
     {:ok, reference, _, _, _, _} = reference(text)
     reference
+  end
+
+  @doc false
+  def parse_string(text) do
+    case text_string(text) do
+      {:ok, string, _, _, _, _} ->
+        string
+
+      error ->
+        error
+    end
   end
 
   @doc false
