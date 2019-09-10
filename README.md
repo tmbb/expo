@@ -1,4 +1,4 @@
-# ExPo
+# Expo
 
 **TODO: Add description**
 
@@ -10,7 +10,7 @@ by adding `ex_po` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_po, "~> 0.1.0"}
+    {:expo, "~> 0.1.0"}
   ]
 end
 ```
